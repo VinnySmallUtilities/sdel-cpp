@@ -1,0 +1,24 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: vinny-sdel *.*\n"
+"Language: ru\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "LOCALE"
+msgstr "ЛОКАЛЬ ru"
+
+msgid "Vinogradov S.V. vinny-sdel"
+msgstr "Виноградов С.В. vinny-sdel"
+
+msgid "Error: Not enough arguments"
+msgstr "Ошибка: недостаточно параметров"
+
+msgid "Usage"
+msgstr "Использование"
+
+msgid "Warning"
+msgstr "Предупреждение"
+
+msgid "File not found for link"
+msgstr "Не найден файл для ссылки"

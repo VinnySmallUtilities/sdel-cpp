@@ -4,14 +4,25 @@
 #include <filesystem>
 #include <unordered_map>
 #include <optional>
-#include <locale>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <locale>
+#include <locale.h>
+#include <libintl.h>
+
+#define _(String) gettext(String)
+#define L(String) std::string(gettext(String))
+
+#define DEBUG
 
 // ПРОВЕРИТЬ, что символьные ссылки правильно обойдены
 // TODO: !!!
 
 namespace fs = std::filesystem;
+using std::endl;
+using std::cout;
 
 enum class DirCheckResult
 {
@@ -40,7 +51,7 @@ DirCheckResult checkIfDirectory(const std::string& path)
 
         if (fs::is_directory(p))
         {
-            if (access(path.c_str(), R_OK | X_OK) != 0)
+            if (access(path.c_str(), R_OK | X_OK) == 0)
                 return DirCheckResult::IS_DIRECTORY;
             else
                 return DirCheckResult::ACCESS_DENIED;
@@ -56,16 +67,23 @@ DirCheckResult checkIfDirectory(const std::string& path)
         {
             return DirCheckResult::ACCESS_DENIED;
         }
+        
+        cout << e.what() << endl;
         return DirCheckResult::OTHER_ERROR;
     }
-    catch (...)
+    catch (const std::exception& e)
     {
+        cout << e.what() << endl;
         return DirCheckResult::OTHER_ERROR;
     }
 }
 
 bool isDirectory(const std::string& path)
 {
+    #ifdef DEBUG
+    cout << "checkIfDirectory " << int(checkIfDirectory(path)) << endl;
+    #endif
+
     return checkIfDirectory(path) == DirCheckResult::IS_DIRECTORY;
 }
 
@@ -78,10 +96,33 @@ bool isDirectoryOrNotExists(const std::string& path)
 struct FileInfo
 {
     std::string name;
+    std::string fullName;
+    fs::path    path;
     uintmax_t   size;
     uintmax_t   block_size;
-    bool        is_directory;
+    bool        is_symlink;
 };
+
+FileInfo getFileInfo(const fs::path& path)
+{
+    FileInfo info;
+    struct stat st;
+
+    auto pc = fs::absolute(path).lexically_normal();
+    
+    info.name         = pc.filename();
+    info.path         = pc;
+    info.fullName     = pc.string();
+    info.is_symlink   = fs::is_symlink(pc);
+
+    if (stat(pc.c_str(), &st) == 0)
+    {
+        info.size       = st.st_size;
+        info.block_size = st.st_blksize; // размер блока ФС
+    }
+
+    return info;
+}
 
 // Структура для описания директории
 struct DirInfo
@@ -91,6 +132,7 @@ struct DirInfo
     std::vector<DirInfo>  subdirs;
     size_t                file_count;
     uintmax_t             total_size;
+    bool                  is_symlink;
 };
 
 // Класс для парсинга аргументов
@@ -101,6 +143,10 @@ private:
     std::vector<std::string>   files_and_dirs;
     std::optional<std::string> temp_pattern;
     std::vector<std::string>   tempd_dirs;
+    
+public:
+    fs::path sdel_exe_dir_path;
+
     bool verbose           = false;
     bool very_verbose      = false;
     bool show_progress     = false;
@@ -118,11 +164,14 @@ private:
 public:
     bool parse(int argc, char* argv[])
     {
-        if (argc < 3) {
-            std::cerr << "Error: Not enough arguments. Usage: " << argv[0] << " [settings] -- files/dirs" << std::endl;
+        sdel_exe_dir_path = fs::canonical(fs::absolute(argv[0])).parent_path();
+
+        if (argc < 3)
+        {
+            std::cerr << L("Error: Not enough arguments") + ". " + _("Usage") + ": " << endl << fs::canonical(fs::absolute(argv[0])) << " [settings] -- files/dirs" << endl;
             return false;
         }
-
+        
         int  i = 1;
         bool incorrect = false;
         // Парсим аргументы-настройки до разделителя
@@ -151,27 +200,28 @@ public:
                 else
                 {
                     std::cerr << "Error: temp argument requires a hex pattern" << std::endl;
-                    return false;
+                    incorrect = true;
                 }
             }
             else if (arg == "tempd")
             {
                 if (i + 1 < argc)
                 {
-                    std::string dirPath = argv[++i];
+                    std::string dirPath = fs::canonical(fs::absolute(argv[++i])).string();
                     if (!isDirectory(dirPath))
                     {
-                        std::cerr << "Error: tempd argument requires a directory (not an existing dir with right persmissions)" << std::endl;
-                        return false;
+                        std::cerr << "Error: tempd argument requires a directory (not an existing dir with right persmissions). " << dirPath << std::endl;
+                        incorrect = true;
                     }
-
-                    tempd_dirs.push_back(dirPath);
-                    ++i; // TODO: !!! Это точно верно????
+                    else
+                    {
+                        tempd_dirs.push_back(dirPath);
+                    }
                 }
                 else
                 {
                     std::cerr << "Error: tempd argument requires a directory (not enough params)" << std::endl;
-                    return false;
+                    incorrect = true;
                 }
             }
             else if (arg == "z0")
@@ -203,7 +253,7 @@ public:
                 create_subdirs = true;
             }
             else if (arg == "nz")
-            {// TODO: !!! Добавить проверку в конце, т.к. no_overwrite имеет смысл только при cr или d
+            {
                 no_overwrite = true;
             }
             else if (arg == "nd")
@@ -231,132 +281,209 @@ public:
         ++i; // пропускаем разделитель
 
         // Проверяем, что есть хотя бы один файл/директория
-        if (i >= argc) {
+        if (i >= argc)
+        {
             std::cerr << "Error: No files or directories specified after '--'" << std::endl;
             return false;
         }
 
         // Собираем файлы и директории
-        while (i < argc) {
+        while (i < argc)
+        {
             files_and_dirs.push_back(argv[i]);
             ++i;
         }
 
         // Проверка для cr, d, nz
-        if ((create_large_file || create_subdirs || no_overwrite) && files_and_dirs.size() != 1) {
+        if ((create_large_file || create_subdirs || no_overwrite) && files_and_dirs.size() != 1)
+        {
             std::cerr << "Error: When using cr, d or nz, exactly one directory must be specified" << std::endl;
-            return false;
+            incorrect = true;
+        }
+
+        if (no_overwrite)
+        if (!create_large_file)
+        {
+            std::cerr << "Error: When using nz, cr must be specified" << std::endl;
+            incorrect = true;
         }
 
         return !incorrect;
     }
 
     // Геттеры для доступа к распарсенным данным
-    const std::vector<std::string>& getSettings() const { return settings; }
-    const std::vector<std::string>& getFilesAndDirs() const { return files_and_dirs; }
+    const std::vector<std::string>& getSettings()      const { return settings; }
+    const std::vector<std::string>& getFilesAndDirs()  const { return files_and_dirs; }
     const std::optional<std::string>& getTempPattern() const { return temp_pattern; }
-    const std::vector<std::string>& getTempDDirs() const { return tempd_dirs; }
-    bool isVerbose() const { return verbose; }
-    bool isVeryVerbose() const { return very_verbose; }
-    bool shouldShowProgress() const { return show_progress; }
-    // ... другие геттеры
+    const std::vector<std::string>& getTempDDirs()     const { return tempd_dirs; }
 };
 
-// Класс локализации
-class Localization {
-private:
-    std::unordered_map<std::string, std::string> messages;
 
-public:
-    bool load(const std::string& locale) {
-        std::string filename = "messages_" + locale + ".txt";
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            std::cerr << "Warning: Could not load localization file: " << filename << std::endl;
-            return false;
-        }
+FileInfo AddFileToDir(DirInfo dir, fs::path path, bool AvoidSymLinks)
+{
+    #ifdef DEBUG
+    cout << "regular" << endl;
+    cout << path.string() << endl;
+    #endif
 
-        std::string key, value;
-        while (std::getline(file, key, '=') && std::getline(file, value)) {
-            messages[key] = value;
-        }
-        return true;
+    FileInfo file = getFileInfo(path);
+    if (AvoidSymLinks && file.is_symlink)
+        return file;
+
+    dir.files.push_back(file);
+    dir.file_count++;
+
+    if (!file.is_symlink)
+    dir.total_size += file.size;
+
+    #ifdef DEBUG
+    cout << "added" << " " << file.size << endl;
+    #endif
+    
+    return file;
+}
+
+DirInfo collectFileSystemInfo(const std::string& path, bool AvoidSymLinks);
+
+void AddDirToDir(DirInfo dir, fs::path path, bool AvoidSymLinks)
+{
+    #ifdef DEBUG
+    cout << "dir" << endl;
+    cout << path.string() << endl;
+    cout << (fs::is_symlink(path) ? "link" : "notlink") << endl;
+    // cout << fs::absolute(path).lexically_normal().string() << endl;
+    #endif
+
+    DirInfo subdir = collectFileSystemInfo(path, AvoidSymLinks);
+    if (AvoidSymLinks && subdir.is_symlink)
+    {
+        return;
     }
 
-    std::string getMessage(const std::string& key) const {
-        auto it = messages.find(key);
-        if (it != messages.end()) {
-            return it->second;
-        }
-        return "Unknown message: " + key;
-    }
-};
+    dir.subdirs.push_back(subdir);
+    dir.file_count += subdir.file_count;
+    dir.total_size += subdir.total_size;
+}
 
 // Функция сбора информации о файловой системе
-DirInfo collectFileSystemInfo(const std::string& path) {
+DirInfo collectFileSystemInfo(const std::string& path, bool AvoidSymLinks)
+{
     DirInfo dir;
-    dir.name = path;
+    dir.name       = fs::absolute(path).lexically_normal();
     dir.file_count = 0;
     dir.total_size = 0;
+    dir.is_symlink = fs::is_symlink(dir.name);
 
-    for (const auto& entry : fs::directory_iterator(path)) {
-        if (fs::is_regular_file(entry.status())) {
-            FileInfo file;
-            file.name = entry.path().filename().string();
-            file.size = fs::file_size(entry);
-            file.block_size = fs::stat_status(entry.symlink_status()).st_blksize;
-            file.is_directory = false;
-            dir.files.push_back(file);
-            dir.file_count++;
-            dir.total_size += file.size;
-        } else if (fs::is_directory(entry.status())) {
-            DirInfo subdir = collectFileSystemInfo(entry.path().string());
-            dir.subdirs.push_back(subdir);
-            dir.file_count += subdir.file_count;
-            dir.total_size += subdir.total_size;
+    if (dir.is_symlink)
+    {
+        if (AvoidSymLinks)
+        {
+            // Игнорируем symlink на папку
+            return dir;
+        }
+        else
+        {
+            // Разрешаем symlink в реальный путь
+            dir.name = fs::canonical(fs::absolute(path));
+
+            #ifdef DEBUG
+            cout << "to " << dir.name << endl;
+            #endif
         }
     }
+    
+    for (auto& entry : fs::directory_iterator(dir.name))
+    {
+        try
+        {
+            // Если это файл, в т.ч. символическая ссылка
+            if (fs::is_regular_file(entry.status()))
+            {
+                AddFileToDir(dir, entry.path(), AvoidSymLinks);
+            }
+            // Если это директория, в т.ч. символическая ссылка
+            else if (fs::is_directory(entry.status()))
+            {
+                AddDirToDir(dir, entry.path(), AvoidSymLinks);
+            }
+            else
+            {
+                #ifdef DEBUG
+                cout << "non regular" << endl;
+                cout << entry.path().string() << endl;
+                #endif
+
+                // Пропускаем всё, кроме symlink
+                if (!fs::is_symlink(entry.path()))
+                {
+                    cout << "skipped" << endl;
+                    continue;
+                }
+
+                // Добавляем файл symlink
+                auto file = AddFileToDir(dir, entry.path(), false);
+
+                auto status = fs::status(file.fullName);
+                if (status.type() == fs::file_type::not_found)
+                {
+                    if (!AvoidSymLinks)
+                    {
+                        std::cerr << L("Warning") + ": " << L("File not found for link") + " " + file.fullName << std::endl;
+                    }
+                    continue;
+                }
+                
+                if (AvoidSymLinks)
+                    continue;
+                
+                fs::path real_path = fs::canonical(entry.path());
+                if (fs::is_directory(real_path))
+                    AddDirToDir(dir, real_path, AvoidSymLinks);
+
+                if (fs::is_regular_file(real_path))
+                    AddFileToDir(dir, real_path, AvoidSymLinks);
+            }
+        }
+        catch (const fs::filesystem_error& ex)
+        {
+            std::cerr << L("Warning") + ": " << ex.what() << std::endl;
+        }
+    }
+
     return dir;
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[])
+{
+    // Устанавливаем локаль и получаем локаль
+    setlocale(LC_ALL, "");
+    std::string locale = setlocale(LC_MESSAGES, "");
+
+    // /usr/share/locale/<locale>/LC_MESSAGES/vinny-sdel.mo
+    if (fs::exists("./locale/" ))
+        bindtextdomain("vinny-sdel", "./locale");
+    else
+        bindtextdomain("vinny-sdel", "/usr/share/locale");
+
+    textdomain("vinny-sdel");
+    
+//    std::cout << locale << std::endl;
+//    std::cout << _("LOCALE") << std::endl;
+
     ArgumentParser parser;
-    if (!parser.parse(argc, argv)) {
+    if (!parser.parse(argc, argv))
+    {
+        if (parser.verbose)
+            std::cout << _("Vinogradov S.V. vinny-sdel") << std::endl;
+
         return 1;
     }
 
-    Localization loc;
-    // Получаем локаль ОС (упрощённо)    // Получаем локаль ОС (упрощённо)
-    std::string locale = setlocale(LC_ALL, nullptr);
-    if (locale.empty()) {
-        locale = "en_US"; // дефолтная локаль
-    } else {
-        // Оставляем только часть до точки (например, ru_RU.UTF-8 -> ru_RU)
-        size_t dot_pos = locale.find('.');
-        if (dot_pos != std::string::npos) {
-            locale = locale.substr(0, dot_pos);
-        }
-    }
-
-    loc.load(locale);
-
     // Обработка verbose-режимов
-    if (parser.isVerbose()) {
-        std::cout << "=== Program Information ===" << std::endl;
-        if (parser.isVeryVerbose()) {
-            std::cout << loc.getMessage("verbose_description") << std::endl;
-            std::cout << "Temp pattern: "
-                      << (parser.getTempPattern().has_value() ? parser.getTempPattern().value() : "not set")
-                      << std::endl;
-            std::cout << "Temp directories: ";
-            for (const auto& dir : parser.getTempDDirs()) {
-                std::cout << dir << " ";
-            }
-            std::cout << std::endl;
-        }
-        std::cout << "Files and directories to process: ";
-        for (const auto& item : parser.getFilesAndDirs()) {
-            std::cout << item << " ";
+    if (parser.verbose)
+    {
+        if (parser.very_verbose)
+        {
         }
         std::cout << std::endl;
     }
@@ -370,19 +497,15 @@ int main(int argc, char* argv[]) {
         }
 
         if (fs::is_directory(path)) {
-            DirInfo dir_info = collectFileSystemInfo(path);
+            DirInfo dir_info = collectFileSystemInfo(path, true);
             main_tree.push_back(dir_info);
-            if (parser.isVerbose()) {
+            if (parser.verbose) {
                 std::cout << "Collected info for directory: " << path
                           << " (files: " << dir_info.file_count
                           << ", total size: " << dir_info.total_size << " bytes)" << std::endl;
             }
         } else if (fs::is_regular_file(path)) {
-            FileInfo file_info;
-            file_info.name = fs::path(path).filename().string();
-            file_info.size = fs::file_size(path);
-            file_info.block_size = fs::status(path).st_blksize;
-            file_info.is_directory = false;
+            FileInfo file_info = getFileInfo(fs::path(path).filename().string());
 
             // Создаём временную директорию для одиночного файла
             DirInfo temp_dir;
@@ -395,6 +518,10 @@ int main(int argc, char* argv[]) {
     }
 
     // Сбор информации для tempd директорий (с обходом символических ссылок)
+    #ifdef DEBUG
+    cout << "tempd parsing" << endl;
+    #endif
+
     std::vector<DirInfo> tempd_tree;
     for (const auto& tempd_path : parser.getTempDDirs()) {
         if (!fs::exists(tempd_path)) {
@@ -402,10 +529,10 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        DirInfo tempd_info = collectFileSystemInfo(tempd_path);
+        DirInfo tempd_info = collectFileSystemInfo(tempd_path, false);
         tempd_tree.push_back(tempd_info);
 
-        if (parser.isVerbose()) {
+        if (parser.verbose) {
             std::cout << "Collected tempd info for: " << tempd_path
                       << " (files: " << tempd_info.file_count
                       << ", total size: " << tempd_info.total_size << " bytes)" << std::endl;
@@ -413,7 +540,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Дополнительная обработка в зависимости от настроек
-    if (parser.shouldShowProgress()) {
+    if (parser.show_progress) {
         std::cout << "Progress calculation enabled" << std::endl;
         // Здесь будет логика расчёта прогресса
     }
@@ -424,7 +551,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Вывод итоговой информации при very verbose
-    if (parser.isVeryVerbose()) {
+    if (parser.very_verbose) {
         std::cout << "\n=== Detailed Summary ===" << std::endl;
         std::cout << "Main tree contains " << main_tree.size() << " root items" << std::endl;
         std::cout << "Tempd tree contains " << tempd_tree.size() << " items" << std::endl;

@@ -1,3 +1,8 @@
+build
+toremove
+*.po~
+*.mo
+
 # Prerequisites
 *.d
 
