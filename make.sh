@@ -52,12 +52,12 @@ echo "Пробный запуск программы без параметров
 echo
 echo
 echo "Пробный запуск программы с параметром."
-echo 'aaa' >> ./build/toremove
+echo '0123456789abcdefg' >> ./build/toremove
 
 mkdir -p toremove
 ln -s ../build/toremove ./toremove/link; ln -s ../locale/ ./toremove/lc; ln -s notexists ./toremove/ne
 
-./build/sdel tempd ./toremove -- ./toremove
+./build/sdel v tempd ./toremove -- ./toremove
 
 r=$?
 if [[ $r -ne 0 || -f $mo_file ]]

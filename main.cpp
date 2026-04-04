@@ -1,3 +1,4 @@
+#include <functional>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -15,7 +16,7 @@
 #define _(String) gettext(String)
 #define L(String) std::string(gettext(String))
 
-#define DEBUG
+// #define DEBUG
 
 // ПРОВЕРИТЬ, что символьные ссылки правильно обойдены
 // TODO: !!!
@@ -23,6 +24,12 @@
 namespace fs = std::filesystem;
 using std::endl;
 using std::cout;
+
+// Тип для массива байтов
+using ByteArray = std::vector<uint8_t>;
+// Тип для списка массивов байтов
+using ByteArrayList = std::vector<ByteArray>;
+
 
 enum class DirCheckResult
 {
@@ -133,7 +140,85 @@ struct DirInfo
     size_t                file_count;
     uintmax_t             total_size;
     bool                  is_symlink;
+    bool                  is_service_dir;
 };
+
+
+// Вспомогательная функция для удаления пробелов и запятых из строки
+std::string removeSeparators(const std::string& input)
+{
+    std::string result;
+    std::copy_if
+    (
+        input.begin(), input.end(), std::back_inserter(result),
+        [](char c) { return c != ' ' && c != ','; }
+    );
+
+    return result;
+}
+
+uint8_t hexToByte(const char* hex)
+{
+    uint8_t value = 0;
+    for (int i = 0; i < 2; ++i)
+    {
+        value = value << 4;
+        char c = hex[i];
+        if (c >= '0' && c <= '9')
+        {
+            value += c - '0';
+        }
+        else if (c >= 'A' && c <= 'F')
+        {
+            value += c - 'A' + 10;
+        }
+        else if (c >= 'a' && c <= 'f')
+        {
+            value += c - 'a' + 10;
+        }
+    }
+
+    return value;
+}
+
+
+ByteArrayList convertHexStringsToBytes(const std::vector<std::string>& temp_pattern)
+{
+    ByteArrayList result;
+
+    for (const auto& str : temp_pattern)
+    {
+        ByteArray byteArray;
+        // Работа со случайно сгенерированными данными: оставляем массив байтов не инициализированным.
+        if (str == "TT" || str == "T")
+        {
+            result.push_back(byteArray);
+            continue;
+        }
+
+        // Удаляем пробелы и запятые
+        std::string cleaned = removeSeparators(str);
+
+        // Проверяем, что длина строки чётная (каждому байту нужны 2 шестнадцатеричных символа)
+        if (cleaned.length() % 2 != 0)
+        {
+            // В случае нечётной длины можно либо выбросить исключение, либо дополнить строку нулём
+            cleaned += '0'; // Дополняем нулём справа
+            cout << _("Warning") << ": " << _("The number of digits in the pattern is odd") << "." << endl;
+        }
+
+        
+        // Преобразуем каждую пару символов в байт
+        for (size_t i = 0; i < cleaned.length(); i += 2)
+        {
+            byteArray.push_back(hexToByte(cleaned.c_str() + i));
+        }
+
+        result.push_back(std::move(byteArray));
+    }
+
+    return result;
+}
 
 // Класс для парсинга аргументов
 class ArgumentParser
@@ -141,25 +226,27 @@ class ArgumentParser
 private:
     std::vector<std::string>   settings;
     std::vector<std::string>   files_and_dirs;
-    std::optional<std::string> temp_pattern;
-    std::vector<std::string>   tempd_dirs;
-    
+
 public:
+    std::vector<std::string>   temp_pattern;
+    ByteArrayList              temp_bytes;
+    std::vector<std::string>   tempd_dirs;
+
     fs::path sdel_exe_dir_path;
+    DirInfo  tempd_files;
+    DirInfo  serviceDir;
 
     bool verbose           = false;
     bool very_verbose      = false;
     bool show_progress     = false;
-    bool zero_pass         = false;
-    bool one_pass          = false;
-    bool two_pass          = false;
-    bool three_pass        = false;
     bool disk_pause        = false;
     bool create_large_file = false;
     bool create_subdirs    = false;
     bool no_overwrite      = false;
     bool no_delete_dirs    = false;
     bool no_delete_files   = false;
+    bool byone             = false;
+    bool dry               = false;
 
 public:
     bool parse(int argc, char* argv[])
@@ -171,7 +258,7 @@ public:
             std::cerr << L("Error: Not enough arguments") + ". " + _("Usage") + ": " << endl << fs::canonical(fs::absolute(argv[0])) << " [settings] -- files/dirs" << endl;
             return false;
         }
-        
+
         int  i = 1;
         bool incorrect = false;
         // Парсим аргументы-настройки до разделителя
@@ -191,11 +278,19 @@ public:
             {
                 show_progress = true;
             }
+            else if (arg == "byone")
+            {
+                byone = true;
+            }
+            else if (arg == "dry")
+            {
+                dry = true;
+            }
             else if (arg == "temp")
             {
                 if (i + 1 < argc)
                 {
-                    temp_pattern = argv[++i];
+                    temp_pattern.push_back(argv[++i]);
                 }
                 else
                 {
@@ -226,19 +321,25 @@ public:
             }
             else if (arg == "z0")
             {
-                zero_pass = true;
+                temp_pattern.push_back("00");
             }
             else if (arg == "z1")
             {
-                one_pass = true;
+                temp_pattern.push_back("55AA");
+                temp_pattern.push_back("00");
             }
             else if (arg == "z2")
             {
-                two_pass = true;
+                temp_pattern.push_back("CC");
+                temp_pattern.push_back("66");
+                temp_pattern.push_back("00");
             }
             else if (arg == "z3")
             {
-                three_pass = true;
+                temp_pattern.push_back("AA");
+                temp_pattern.push_back("CC");
+                temp_pattern.push_back("66");
+                temp_pattern.push_back("00");
             }
             else if (arg == "sl")
             {
@@ -314,19 +415,16 @@ public:
     // Геттеры для доступа к распарсенным данным
     const std::vector<std::string>& getSettings()      const { return settings; }
     const std::vector<std::string>& getFilesAndDirs()  const { return files_and_dirs; }
-    const std::optional<std::string>& getTempPattern() const { return temp_pattern; }
     const std::vector<std::string>& getTempDDirs()     const { return tempd_dirs; }
 };
 
-
-FileInfo AddFileToDir(DirInfo dir, fs::path path, bool AvoidSymLinks)
+FileInfo AddFileToDir(DirInfo& dir, const FileInfo& file, bool AvoidSymLinks)
 {
     #ifdef DEBUG
     cout << "regular" << endl;
-    cout << path.string() << endl;
+    cout << file.fullName << endl;
     #endif
 
-    FileInfo file = getFileInfo(path);
     if (AvoidSymLinks && file.is_symlink)
         return file;
 
@@ -343,9 +441,16 @@ FileInfo AddFileToDir(DirInfo dir, fs::path path, bool AvoidSymLinks)
     return file;
 }
 
+FileInfo AddFileToDir(DirInfo& dir, fs::path path, bool AvoidSymLinks)
+{
+    FileInfo file = getFileInfo(path);
+
+    return AddFileToDir(dir, file, AvoidSymLinks);
+}
+
 DirInfo collectFileSystemInfo(const std::string& path, bool AvoidSymLinks);
 
-void AddDirToDir(DirInfo dir, fs::path path, bool AvoidSymLinks)
+void AddDirToDir(DirInfo& dir, fs::path path, bool AvoidSymLinks)
 {
     #ifdef DEBUG
     cout << "dir" << endl;
@@ -373,6 +478,7 @@ DirInfo collectFileSystemInfo(const std::string& path, bool AvoidSymLinks)
     dir.file_count = 0;
     dir.total_size = 0;
     dir.is_symlink = fs::is_symlink(dir.name);
+    dir.is_service_dir = false;
 
     if (dir.is_symlink)
     {
@@ -453,6 +559,37 @@ DirInfo collectFileSystemInfo(const std::string& path, bool AvoidSymLinks)
     return dir;
 }
 
+DirInfo extractAllFiles(const std::vector<DirInfo>& dirs)
+{
+    DirInfo result;
+    result.total_size = 0;
+    result.file_count = 0;
+
+    std::function<void(const DirInfo&)> traverse = [&](const DirInfo& dir)
+    {
+        // Добавляем все файлы текущей директории
+        for (const auto& file : dir.files)
+        {
+            AddFileToDir(result, file, false);
+        }
+
+        // Рекурсивно обходим поддиректории
+        for (const auto& subdir : dir.subdirs)
+        {
+            traverse(subdir);
+        }
+    };
+
+    // Запускаем обход для каждой корневой директории
+    for (const auto& dir : dirs)
+    {
+        traverse(dir);
+    }
+
+    return result;
+}
+
+
 int main(int argc, char* argv[])
 {
     // Устанавливаем локаль и получаем локаль
@@ -488,32 +625,45 @@ int main(int argc, char* argv[])
         std::cout << std::endl;
     }
 
-    // Сбор информации о файловой системе для основных файлов/директорий
-    std::vector<DirInfo> main_tree;
-    for (const auto& path : parser.getFilesAndDirs()) {
-        if (!fs::exists(path)) {
-            std::cerr << "Warning: Path does not exist: " << path << std::endl;
-            continue;
-        }
+    // Вспомогательная директория для того, чтобы добавлять в неё файлы
+    parser.serviceDir.name       = "/nonexistent";
+    parser.serviceDir.file_count = 0;
+    parser.serviceDir.total_size = 0;
+    parser.serviceDir.is_symlink = false;
+    parser.serviceDir.is_service_dir = true;
 
-        if (fs::is_directory(path)) {
-            DirInfo dir_info = collectFileSystemInfo(path, true);
-            main_tree.push_back(dir_info);
-            if (parser.verbose) {
-                std::cout << "Collected info for directory: " << path
-                          << " (files: " << dir_info.file_count
-                          << ", total size: " << dir_info.total_size << " bytes)" << std::endl;
+    for (const auto& path : parser.getFilesAndDirs())
+    {
+        try
+        {
+            if (!fs::exists(path))
+            {
+                std::cerr << _("Warning") << ": " << _("Path does not exist") << ": " << path << std::endl;
+                continue;
             }
-        } else if (fs::is_regular_file(path)) {
-            FileInfo file_info = getFileInfo(fs::path(path).filename().string());
 
-            // Создаём временную директорию для одиночного файла
-            DirInfo temp_dir;
-            temp_dir.name = fs::path(path).parent_path().string();
-            temp_dir.files.push_back(file_info);
-            temp_dir.file_count = 1;
-            temp_dir.total_size = file_info.size;
-            main_tree.push_back(temp_dir);
+            auto Path = fs::absolute(path).lexically_normal();
+            if (fs::is_symlink(Path))
+            {
+                AddFileToDir(parser.serviceDir, Path, false);
+            }
+
+            Path = fs::canonical(Path);
+            // Если это файл, в т.ч. символическая ссылка
+            if (fs::is_regular_file(Path))
+            {
+                AddFileToDir(parser.serviceDir, Path, true);
+            }
+            else
+            // Если это директория, в т.ч. символическая ссылка
+            if (fs::is_directory(Path))
+            {
+                AddDirToDir(parser.serviceDir, Path, true);
+            }
+        }
+        catch (const fs::filesystem_error& ex)
+        {
+            std::cerr << L("Warning") + ": " << ex.what() << std::endl;
         }
     }
 
@@ -523,8 +673,10 @@ int main(int argc, char* argv[])
     #endif
 
     std::vector<DirInfo> tempd_tree;
-    for (const auto& tempd_path : parser.getTempDDirs()) {
-        if (!fs::exists(tempd_path)) {
+    for (const auto& tempd_path : parser.getTempDDirs())
+    {
+        if (!fs::exists(tempd_path))
+        {
             std::cerr << "Warning: Temp directory does not exist: " << tempd_path << std::endl;
             continue;
         }
@@ -532,47 +684,35 @@ int main(int argc, char* argv[])
         DirInfo tempd_info = collectFileSystemInfo(tempd_path, false);
         tempd_tree.push_back(tempd_info);
 
-        if (parser.verbose) {
+        if (parser.very_verbose)
+        {
             std::cout << "Collected tempd info for: " << tempd_path
                       << " (files: " << tempd_info.file_count
                       << ", total size: " << tempd_info.total_size << " bytes)" << std::endl;
         }
     }
 
-    // Дополнительная обработка в зависимости от настроек
-    if (parser.show_progress) {
-        std::cout << "Progress calculation enabled" << std::endl;
-        // Здесь будет логика расчёта прогресса
-    }
+    parser.tempd_files = extractAllFiles(tempd_tree);
+    if (parser.verbose)
+    {
+        if (parser.serviceDir.total_size > 0 || parser.serviceDir.file_count > 0)
+        {
+            cout << _("Files prepared for deletion") << ":" << parser.tempd_files.file_count << ", size " << parser.tempd_files.total_size << endl;
+        }
 
-    if (parser.getTempPattern().has_value()) {
-        std::cout << "Using overwrite pattern: " << parser.getTempPattern().value() << std::endl;
-        // Здесь будет логика применения шаблона перезатирания
-    }
-
-    // Вывод итоговой информации при very verbose
-    if (parser.very_verbose) {
-        std::cout << "\n=== Detailed Summary ===" << std::endl;
-        std::cout << "Main tree contains " << main_tree.size() << " root items" << std::endl;
-        std::cout << "Tempd tree contains " << tempd_tree.size() << " items" << std::endl;
-
-        // Выводим структуру основной директории (если есть)
-        if (!main_tree.empty()) {
-            const auto& root = main_tree[0];
-            std::cout << "Root: " << root.name << std::endl;
-            std::cout << "  Files: " << root.file_count << std::endl;
-            std::cout << "  Total size: " << root.total_size << " bytes" << std::endl;
-
-            if (!root.files.empty()) {
-                std::cout << "  First few files:" << std::endl;
-                for (size_t i = 0; i < std::min(root.files.size(), size_t(5)); ++i) {
-                    const auto& file = root.files[i];
-                    std::cout << "    " << file.name << " (" << file.size << " bytes, "
-                      << file.block_size << " block size)" << std::endl;
-                }
-            }
+        if (parser.tempd_files.total_size > 0)
+        {
+            cout << _("Files prepared for tempd") << ":" << parser.tempd_files.file_count << ", size " << parser.tempd_files.total_size << endl;
         }
     }
+
+    if (parser.temp_pattern.empty())
+    {
+        parser.temp_pattern.push_back("00");
+    }
+
+    parser.temp_bytes = convertHexStringsToBytes(parser.temp_pattern);
+
 
     std::cout << "Program completed successfully" << std::endl;
     return 0;

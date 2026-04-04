@@ -17,8 +17,25 @@ msgstr "Error: Not enough arguments"
 msgid "Usage"
 msgstr "Usage"
 
+msgid "ERROR"
+msgstr "ERROR"
+
+msgid "Error"
+msgstr "Error"
+
 msgid "Warning"
 msgstr "Warning"
 
 msgid "File not found for link"
 msgstr "File not found for link"
+
+msgid "Path does not exist"
+msgstr "Path does not exist"
+
+msgid "Files prepared for deletion"
+msgstr "Files prepared for deletion"
+
+msgid "Files prepared for tempd"
+msgstr "Files prepared for tempd"
+
+

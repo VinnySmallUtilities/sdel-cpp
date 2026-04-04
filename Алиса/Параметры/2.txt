@@ -1,0 +1,57 @@
+Дан следующий код
+
+// Структура для описания файла
+struct FileInfo
+{
+    std::string name;
+    std::string fullName;
+    fs::path    path;
+    uintmax_t   size;
+    uintmax_t   block_size;
+    bool        is_symlink;
+};
+
+FileInfo getFileInfo(const fs::path& path)
+{
+    FileInfo info;
+    struct stat st;
+
+    auto pc = fs::absolute(path).lexically_normal();
+    
+    info.name         = pc.filename();
+    info.path         = pc;
+    info.fullName     = pc.string();
+    info.is_symlink   = fs::is_symlink(pc);
+
+    if (stat(pc.c_str(), &st) == 0)
+    {
+        info.size       = st.st_size;
+        info.block_size = st.st_blksize; // размер блока ФС
+    }
+
+    return info;
+}
+
+// Структура для описания директории
+struct DirInfo
+{
+    std::string           name;
+    std::vector<FileInfo> files;
+    std::vector<DirInfo>  subdirs;
+    size_t                file_count;
+    uintmax_t             total_size;
+    bool                  is_symlink;
+    bool                  is_service_dir;
+};
+
+
+int main()
+{
+    std::vector<DirInfo> tempd_tree;
+    // ... некоторые операции, заполняющие tempd_tree
+    
+}
+
+После исполнения кода в tempd_tree находятся описатели DirInfo некоторых директорий. Внутри них находятся также описатели подчинённых файлов FileInfo и директорий DirInfo. То есть это дерево. Необходимо:
+1. Из этого дерева извлечь все структуры FileInfo в один массив.
+2. При извлечении подсчитать общий размер файлов (исходя из поля FileInfo.size).

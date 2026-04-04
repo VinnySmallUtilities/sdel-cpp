@@ -17,8 +17,24 @@ msgstr "Ошибка: недостаточно параметров"
 msgid "Usage"
 msgstr "Использование"
 
+msgid "ERROR"
+msgstr "ОШИБКА"
+
+msgid "Error"
+msgstr "Ошибка"
+
 msgid "Warning"
 msgstr "Предупреждение"
 
 msgid "File not found for link"
 msgstr "Не найден файл для ссылки"
+
+msgid "Path does not exist"
+msgstr "Пусть не существует"
+
+msgid "Files prepared for deletion"
+msgstr "Файлов подготовлено для удаления"
+
+msgid "Files prepared for tempd"
+msgstr "Файлов подготовлено для tempd"
+
