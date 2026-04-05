@@ -11,7 +11,8 @@
 #include <unistd.h>
 #include <locale>
 #include <locale.h>
-#include <libintl.h>
+#include <chrono>
+#include <mutex>
 
 #define _(String) gettext(String)
 #define L(String) std::string(gettext(String))
@@ -121,6 +122,8 @@ FileInfo getFileInfo(const fs::path& path)
     info.path         = pc;
     info.fullName     = pc.string();
     info.is_symlink   = fs::is_symlink(pc);
+    info.size         = 0;
+    info.block_size   = 0;
 
     if (stat(pc.c_str(), &st) == 0)
     {
@@ -248,6 +251,11 @@ public:
     bool byone             = false;
     bool dry               = false;
 
+    bool isCreationMode()
+    {
+        return create_large_file || create_subdirs;
+    }
+    
 public:
     bool parse(int argc, char* argv[])
     {
@@ -552,7 +560,8 @@ DirInfo collectFileSystemInfo(const std::string& path, bool AvoidSymLinks)
         }
         catch (const fs::filesystem_error& ex)
         {
-            std::cerr << L("Warning") + ": " << ex.what() << std::endl;
+            std::cerr << _("For") << " " << entry.path() << std:endl;
+            std::cerr << L("Warning") + ": " << ex.what() << std::endl << std::endl;
         }
     }
 
@@ -589,9 +598,26 @@ DirInfo extractAllFiles(const std::vector<DirInfo>& dirs)
     return result;
 }
 
+std::mutex localtime_mutex;
+std::string getTimeString(std::time_t& now_c)
+{
+    std::lock_guard<std::mutex> lock(localtime_mutex);
+
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&now_c), "%H:%M:%S");
+    return ss.str();
+}
+
+std::string getTimeNowString()
+{
+    std::time_t now_c = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    return getTimeString(now_c);
+}
 
 int main(int argc, char* argv[])
 {
+    auto start = std::chrono::steady_clock::now();
+
     // Устанавливаем локаль и получаем локаль
     setlocale(LC_ALL, "");
     std::string locale = setlocale(LC_MESSAGES, "");
@@ -616,12 +642,22 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Обработка verbose-режимов
+    if (parser.verbose)
+    {
+        std::cout << _("Vinogradov S.V. vinny-sdel") << std::endl;
+        cout << getTimeNowString() << endl;
+    }
+
     if (parser.verbose)
     {
         if (parser.very_verbose)
         {
+            if (!parser.isCreationMode())
+            {
+                cout << _("Begin to crawl the directories to collect information about the files being deleted") << "." << endl;
+            }
         }
+
         std::cout << std::endl;
     }
 
@@ -636,10 +672,26 @@ int main(int argc, char* argv[])
     {
         try
         {
-            if (!fs::exists(path))
+            if (fs::exists(path))
             {
-                std::cerr << _("Warning") << ": " << _("Path does not exist") << ": " << path << std::endl;
-                continue;
+                if (parser.isCreationMode())
+                {
+                    if (parser.very_verbose)
+                    {
+                        std::cerr << _("Warning") << ": " << _("The path exist");
+                        std::cerr << ": " << path << std::endl;
+                        continue;
+                    }
+                }
+            }
+            else
+            {
+                if (!parser.isCreationMode())
+                {
+                    std::cerr << _("Warning") << ": " << _("Path does not exist");
+                    std::cerr << ": " << path << std::endl;
+                    continue;
+                }                
             }
 
             auto Path = fs::absolute(path).lexically_normal();
@@ -671,7 +723,23 @@ int main(int argc, char* argv[])
     #ifdef DEBUG
     cout << "tempd parsing" << endl;
     #endif
+    
 
+    if (!parser.getTempDDirs().empty())
+    if (parser.verbose)
+    {
+        if (parser.very_verbose)
+        {
+            if (!parser.isCreationMode())
+            {
+                cout << _("Begin to crawl the directories to collect information about the files for tempd template") << "." << endl;
+            }
+        }
+
+        std::cout << std::endl;
+    }
+
+    // Обработка каталогов для tempd
     std::vector<DirInfo> tempd_tree;
     for (const auto& tempd_path : parser.getTempDDirs())
     {
@@ -714,6 +782,15 @@ int main(int argc, char* argv[])
     parser.temp_bytes = convertHexStringsToBytes(parser.temp_pattern);
 
 
-    std::cout << "Program completed successfully" << std::endl;
+    auto end = std::chrono::steady_clock::now();
+    std::chrono::duration<double> duration = end - start;
+
+    if (parser.verbose)
+    {
+        std::cout << getTimeNowString() << endl;
+        std::cout << "The program is completed in" << " " << duration.count() << " s" << std::endl;
+    }
+
     return 0;
 }
+

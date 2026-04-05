@@ -9,7 +9,10 @@ msgid "LOCALE"
 msgstr "ЛОКАЛЬ ru"
 
 msgid "Vinogradov S.V. vinny-sdel"
-msgstr "Виноградов С.В. vinny-sdel"
+msgstr "Виноградов С.В.\n"
+"vinny-sdel\n"
+"github.com/VinnySmallUtilities/sdel-cpp"
+
 
 msgid "Error: Not enough arguments"
 msgstr "Ошибка: недостаточно параметров"
@@ -31,6 +34,9 @@ msgstr "Не найден файл для ссылки"
 
 msgid "Path does not exist"
 msgstr "Пусть не существует"
+
+msgid "The path exist"
+msgstr "Путь существует"
 
 msgid "Files prepared for deletion"
 msgstr "Файлов подготовлено для удаления"

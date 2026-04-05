@@ -42,6 +42,10 @@ find locale -name "*.po" -type f | while read po_file; do
     fi
 done
 
+
+# Тесты
+
+
 echo
 echo "Пробный запуск программы без параметров."
 
@@ -51,19 +55,60 @@ echo "Пробный запуск программы без параметров
 
 echo
 echo
-echo "Пробный запуск программы с параметром."
+echo "Пробный запуск программы с параметром vv."
 echo '0123456789abcdefg' >> ./build/toremove
 
+rm -rf toremove
 mkdir -p toremove
 ln -s ../build/toremove ./toremove/link; ln -s ../locale/ ./toremove/lc; ln -s notexists ./toremove/ne
 
-./build/sdel v tempd ./toremove -- ./toremove
+./build/sdel vv -- ./toremove
 
 r=$?
 if [[ $r -ne 0 || -f $mo_file ]]
 then
-    echo "Провальный запуск. ec=$r"
+    echo "Провальный запуск. exit=$r"
 else
-    echo "Успешный запуск. ec=$r"
+    echo "Успешный запуск. exit=$r"
 fi
+
+echo
+echo
+echo "Пробный запуск программы с параметром vv и tempd."
+echo '0123456789abcdefg' >> ./build/toremove
+
+rm -rf toremove
+mkdir -p toremove
+ln -s ../build/toremove ./toremove/link; ln -s ../locale/ ./toremove/lc; ln -s notexists ./toremove/ne
+
+./build/sdel vv tempd /usr/bin tempd /usr/share tempd /etc -- ./toremove
+
+r=$?
+if [[ $r -ne 0 || -f $mo_file ]]
+then
+    echo "Провальный запуск. exit=$r"
+else
+    echo "Успешный запуск. exit=$r"
+fi
+
+
+echo
+echo
+echo "Пробный запуск программы без параметра v (должен быть пустой вывод)."
+echo '0123456789abcdefg' >> ./build/toremove
+
+rm -rf toremove
+mkdir -p toremove
+ln -s ../build/toremove ./toremove/link; ln -s ../locale/ ./toremove/lc; ln -s notexists ./toremove/ne
+
+./build/sdel tempd /usr/bin tempd /usr/share tempd /etc -- ./toremove
+
+r=$?
+if [[ $r -ne 0 || -f $mo_file ]]
+then
+    echo "Провальный запуск. exit=$r"
+else
+    echo "Успешный запуск. exit=$r"
+fi
+
 
